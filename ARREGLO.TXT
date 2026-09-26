@@ -1,0 +1,19 @@
+# 1. Asegurarte de no estar dentro del venv
+deactivate
+
+# 2. Crear el nuevo venv con Python 3.10 (NO 3.11)
+py -3.10 -m venv venv310
+
+# 3. Activarlo
+.\venv310\Scripts\Activate.ps1
+
+# 4. Instalar dependencias compatibles
+python -m pip install numpy==1.26.4
+python -m pip install tensorflow-cpu==2.16.2
+python -m pip install PyQt5 matplotlib pillow
+
+# 5. Verificar que TensorFlow carga
+python -c "import tensorflow as tf; print(tf.__version__)"
+
+# 6. Ejecutar la app
+python app.py

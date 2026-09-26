@@ -1,0 +1,28 @@
+# Entornos virtuales
+venv/
+venv310/
+venv311/
+env/
+.venv/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# PyInstaller
+build/
+dist/
+*.manifest
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Imágenes corregidas por el usuario (opcional, quítalo si las quieres subir)
+imagenes_corregidas/
+
+# VS Code
+.vscode/
