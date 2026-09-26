@@ -48,25 +48,19 @@ Tu carpeta debe verse así:
 
    python app.py
 
----------------------------------------------------------
-DESCRIPCIÓN BREVE
----------------------------------------------------------
-- El sistema permite seleccionar imágenes y clasificar automáticamente el plato peruano.
-- Puedes dar retroalimentación y corregir la clase, además de agregar nuevas clases.
-- Guarda un historial de predicciones, muestra métricas y permite exportar el historial a CSV.
-- Las imágenes corregidas se guardan en la carpeta `imagenes_corregidas/` para posibles futuros reentrenamientos.
+# Clonar el repositorio
+git clone https://github.com/Ardamins/PYTHON-COMIDAS.git
+cd PYTHON-COMIDAS
 
----------------------------------------------------------
-CONTACTO Y AUTORES
----------------------------------------------------------
-- [Luis Anderson Xavier Condor Miranda]
-- [acondormi@ucvvirtual.edu.pe]
+# Crear el venv con Python 3.10
+py -3.10 -m venv venv
+.\venv\Scripts\Activate.ps1
 
----------------------------------------------------------
-NOTAS
----------------------------------------------------------
-- Si tienes errores con librerías, asegúrate de tener Python y pip correctamente instalados.
-- Si usas Windows, puedes crear un entorno virtual para evitar conflictos de dependencias.
-- Para volver a generar el ejecutable, utiliza el archivo `app.spec` y PyInstaller.
+# Instalar dependencias
+python -m pip install --upgrade pip
+python -m pip install numpy==1.26.4
+python -m pip install tensorflow-cpu==2.16.2
+python -m pip install PyQt5 matplotlib pillow
 
-=========================================================
+# Ejecutar
+python app.py
