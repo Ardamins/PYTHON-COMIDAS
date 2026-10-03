@@ -45,9 +45,6 @@ except ImportError:
             tflite = None
 
 
-# ------------------------------------------------------------------
-# Importación de OpenCV (opcional, para webcam)
-# ------------------------------------------------------------------
 try:
     import cv2
     _HAS_CV2 = True
@@ -96,13 +93,35 @@ HISTORIAL_JSON = os.path.join(BASE_DIR, "historial_predicciones.json")
 
 IMG_SIZE = (224, 224)
 
+# >>> FIX: Orden fijo de clases, coincide EXACTAMENTE con las carpetas en C:\Proy4\comidas
+# >>> y con el orden de entrenamiento del modelo.
+ORDEN_CLASES_ENTRENAMIENTO = [
+    "anticucho_peruano",
+    "arroz_chaufa",
+    "causa_limeña",
+    "ceviche_peruano",
+    "fideos_verdes_peruanos",
+    "lomo_saltado",
+    "pachamanca",
+    "papa_rellena_peruana",
+    "pizza",
+    "pollo_a_la_brasa",
+]
+
 if os.path.isdir(CLASS_DIR):
-    CLASS_NAMES = sorted(
+    carpetas_en_disco = sorted(
         d for d in os.listdir(CLASS_DIR)
         if os.path.isdir(os.path.join(CLASS_DIR, d))
     )
+    if set(carpetas_en_disco) == set(ORDEN_CLASES_ENTRENAMIENTO):
+        CLASS_NAMES = list(ORDEN_CLASES_ENTRENAMIENTO)
+    else:
+        CLASS_NAMES = [c for c in ORDEN_CLASES_ENTRENAMIENTO if c in carpetas_en_disco]
+        for c in carpetas_en_disco:
+            if c not in CLASS_NAMES:
+                CLASS_NAMES.append(c)
 else:
-    CLASS_NAMES = []
+    CLASS_NAMES = list(ORDEN_CLASES_ENTRENAMIENTO)
 
 
 # ------------------------------------------------------------------
@@ -131,9 +150,9 @@ input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
 
-def predecir_imagen(image_path, top_k=3):
-    t0 = time.perf_counter()
-    img = Image.open(image_path).convert('RGB').resize(IMG_SIZE)
+def _inferencia(array_rgb):
+    """Ejecuta la inferencia y devuelve el vector de salida crudo."""
+    img = Image.fromarray(array_rgb).convert('RGB').resize(IMG_SIZE)
 
     if input_details[0]['dtype'] == np.uint8:
         array = np.array(img).astype(np.uint8)
@@ -145,42 +164,47 @@ def predecir_imagen(image_path, top_k=3):
     interpreter.set_tensor(input_details[0]['index'], array)
     interpreter.invoke()
     output = interpreter.get_tensor(output_details[0]['index'])[0]
+    return output
 
-    n = min(top_k, len(CLASS_NAMES))
-    top_idx = np.argsort(output)[-n:][::-1]
+
+def _mapear_resultados(output, top_k=3):
+    """
+    Mapea el vector de salida a nombres de clase.
+    Detecta si son probabilidades (softmax) o logits y aplica softmax si hace falta.
+    """
+    output = np.asarray(output, dtype=np.float32)
+    suma = float(np.sum(output))
+
+    if 0.99 < suma < 1.01 and np.all(output >= 0):
+        probs = output
+    else:
+        exp = np.exp(output - np.max(output))
+        probs = exp / np.sum(exp)
+
+    n = min(top_k, len(CLASS_NAMES), len(probs))
+    top_idx = np.argsort(probs)[-n:][::-1]
 
     resultados = []
     for i in top_idx:
         if i < len(CLASS_NAMES):
-            resultados.append((CLASS_NAMES[i], float(output[i]) * 100))
+            resultados.append((CLASS_NAMES[i], float(probs[i]) * 100))
+    return resultados
 
+
+def predecir_imagen(image_path, top_k=3):
+    t0 = time.perf_counter()
+    img = Image.open(image_path).convert('RGB').resize(IMG_SIZE)
+    arr = np.array(img)
+    output = _inferencia(arr)
+    resultados = _mapear_resultados(output, top_k=top_k)
     tiempo_ms = (time.perf_counter() - t0) * 1000
     return resultados, tiempo_ms
 
 
 def predecir_array(arr_rgb, top_k=3):
     t0 = time.perf_counter()
-    img = Image.fromarray(arr_rgb).convert('RGB').resize(IMG_SIZE)
-
-    if input_details[0]['dtype'] == np.uint8:
-        array = np.array(img).astype(np.uint8)
-    else:
-        array = np.array(img).astype(np.float32) / 255.0
-        array = array.astype(input_details[0]['dtype'])
-
-    array = np.expand_dims(array, axis=0)
-    interpreter.set_tensor(input_details[0]['index'], array)
-    interpreter.invoke()
-    output = interpreter.get_tensor(output_details[0]['index'])[0]
-
-    n = min(top_k, len(CLASS_NAMES))
-    top_idx = np.argsort(output)[-n:][::-1]
-
-    resultados = []
-    for i in top_idx:
-        if i < len(CLASS_NAMES):
-            resultados.append((CLASS_NAMES[i], float(output[i]) * 100))
-
+    output = _inferencia(arr_rgb)
+    resultados = _mapear_resultados(output, top_k=top_k)
     tiempo_ms = (time.perf_counter() - t0) * 1000
     return resultados, tiempo_ms
 
@@ -205,9 +229,6 @@ def color_por_confianza(confianza):
         return COLOR_ROJO, COLOR_ROJO_BG, "Baja confianza"
 
 
-# ------------------------------------------------------------------
-# Nombres amigables
-# ------------------------------------------------------------------
 NOMBRES_AMIGABLES = {
     "anticucho_peruano": "Anticucho peruano",
     "arroz_chaufa": "Arroz chaufa",
@@ -231,7 +252,6 @@ def nombre_amigable(clase):
 # Zona de drop personalizada
 # ------------------------------------------------------------------
 class ImageDropZone(QLabel):
-    """Zona de imagen con marco limpio y placeholder."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(240, 240)
@@ -256,13 +276,11 @@ class ImageDropZone(QLabel):
         rect = self.rect().adjusted(1, 1, -1, -1)
         radius = 12
 
-        # Fondo
         if self._pixmap:
             painter.setBrush(QColor("#ffffff"))
         else:
             painter.setBrush(QColor("#f7f9fc"))
 
-        # Borde
         if self._hover:
             pen = QPen(QColor("#1a3a6b"), 2, Qt.SolidLine)
         elif self._pixmap:
@@ -272,7 +290,6 @@ class ImageDropZone(QLabel):
         painter.setPen(pen)
         painter.drawRoundedRect(rect, radius, radius)
 
-        # Contenido
         if self._pixmap:
             margen = 8
             area = rect.adjusted(margen, margen, -margen, -margen)
@@ -765,7 +782,8 @@ class ClasificadorApp(QWidget):
         self.setMinimumSize(1050, 680)
 
         self.tema_oscuro = False
-        self.historial = self._cargar_historial()
+        self.historial = []          # >>> FIX: siempre empieza vacío
+        self._borrar_historial_archivo()  # >>> FIX: borra el .json viejo al arrancar
 
         # ==========================================================
         # TÍTULO
@@ -791,7 +809,6 @@ class ClasificadorApp(QWidget):
         panel_izq = QVBoxLayout()
         panel_izq.setSpacing(10)
 
-        # --- Grupo: Imagen de entrada (imagen + botón juntos) ---
         grupo_imagen = QGroupBox("IMAGEN DE ENTRADA")
         layout_imagen = QVBoxLayout()
         layout_imagen.setContentsMargins(12, 12, 12, 12)
@@ -823,7 +840,6 @@ class ClasificadorApp(QWidget):
         grupo_imagen.setLayout(layout_imagen)
         panel_izq.addWidget(grupo_imagen)
 
-        # --- Grupo: Herramientas (grid 2x2) ---
         grupo_herramientas = QGroupBox("HERRAMIENTAS")
         layout_herr = QGridLayout()
         layout_herr.setContentsMargins(12, 12, 12, 12)
@@ -856,7 +872,6 @@ class ClasificadorApp(QWidget):
         grupo_herramientas.setLayout(layout_herr)
         panel_izq.addWidget(grupo_herramientas)
 
-        # --- Grupo: Resultado ---
         grupo_resultado = QGroupBox("RESULTADO DE LA PREDICCIÓN")
         layout_resultado = QVBoxLayout()
         layout_resultado.setContentsMargins(12, 12, 12, 12)
@@ -883,7 +898,6 @@ class ClasificadorApp(QWidget):
         grupo_resultado.setLayout(layout_resultado)
         panel_izq.addWidget(grupo_resultado)
 
-        # --- Grupo: Top 3 ---
         grupo_top3 = QGroupBox("TOP 3 PREDICCIONES")
         layout_top3 = QVBoxLayout()
         layout_top3.setContentsMargins(12, 12, 12, 12)
@@ -927,7 +941,6 @@ class ClasificadorApp(QWidget):
         panel_der = QVBoxLayout()
         panel_der.setSpacing(10)
 
-        # --- Grupo: Platos reconocidos (grid 3 columnas) ---
         grupo_platos = QGroupBox("PLATOS RECONOCIDOS")
         layout_platos = QVBoxLayout()
         layout_platos.setContentsMargins(12, 12, 12, 12)
@@ -968,7 +981,6 @@ class ClasificadorApp(QWidget):
         grupo_platos.setLayout(layout_platos)
         panel_der.addWidget(grupo_platos)
 
-        # --- Grupo: Métricas ---
         grupo_metricas = QGroupBox("MÉTRICAS DE LA SESIÓN")
         layout_metricas = QVBoxLayout()
         layout_metricas.setContentsMargins(12, 12, 12, 12)
@@ -996,8 +1008,7 @@ class ClasificadorApp(QWidget):
         grupo_metricas.setLayout(layout_metricas)
         panel_der.addWidget(grupo_metricas)
 
-        # --- Grupo: Gráfico ---
-        grupo_grafico = QGroupBox("DISTRIBUCIÓN DE PREDICCIONES")
+        grupo_grafico = QGroupBox("PREDICCIÓN ACTUAL")
         layout_grafico = QVBoxLayout()
         layout_grafico.setContentsMargins(12, 12, 12, 12)
 
@@ -1010,7 +1021,6 @@ class ClasificadorApp(QWidget):
         grupo_grafico.setLayout(layout_grafico)
         panel_der.addWidget(grupo_grafico)
 
-        # --- Grupo: Acciones ---
         grupo_acciones = QGroupBox("ACCIONES")
         layout_acciones = QVBoxLayout()
         layout_acciones.setContentsMargins(12, 12, 12, 12)
@@ -1046,11 +1056,22 @@ class ClasificadorApp(QWidget):
 
         layout_acciones.addLayout(fila_acciones)
 
+        fila_acciones2 = QHBoxLayout()
+        fila_acciones2.setSpacing(8)
+
+        self.btn_limpiar = QPushButton("Limpiar historial")
+        self.btn_limpiar.clicked.connect(self.limpiar_historial)
+        self.btn_limpiar.setMinimumHeight(36)
+        self.btn_limpiar.setCursor(Qt.PointingHandCursor)
+        fila_acciones2.addWidget(self.btn_limpiar)
+
         self.btn_tema = QPushButton("Modo Oscuro")
         self.btn_tema.clicked.connect(self.alternar_tema)
         self.btn_tema.setMinimumHeight(36)
         self.btn_tema.setCursor(Qt.PointingHandCursor)
-        layout_acciones.addWidget(self.btn_tema)
+        fila_acciones2.addWidget(self.btn_tema)
+
+        layout_acciones.addLayout(fila_acciones2)
 
         grupo_acciones.setLayout(layout_acciones)
         panel_der.addWidget(grupo_acciones)
@@ -1076,24 +1097,24 @@ class ClasificadorApp(QWidget):
         self.setLayout(contenedor)
         self.setStyleSheet(TEMA_CLARO)
 
-        # Estado
         self.ultima_imagen_path = None
         self.ultima_prediccion = None
+        self.ultima_confianza = 0.0
         self.class_names = list(CLASS_NAMES)
         self.demo_activo = False
+        self._demo_cola = []
+        self._demo_idx = 0
 
         self.actualizar_metricas()
 
     # --------------------------------------------------------------
-    def _cargar_historial(self):
-        if os.path.exists(HISTORIAL_JSON):
-            try:
-                with open(HISTORIAL_JSON, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                return [list(item) for item in data]
-            except Exception:
-                return []
-        return []
+    def _borrar_historial_archivo(self):
+        """Elimina el archivo .json del historial si existe."""
+        try:
+            if os.path.exists(HISTORIAL_JSON):
+                os.remove(HISTORIAL_JSON)
+        except Exception:
+            pass
 
     def _guardar_historial(self):
         try:
@@ -1227,6 +1248,7 @@ class ClasificadorApp(QWidget):
             )
             self.ultima_imagen_path = ruta
             self.ultima_prediccion = None
+            self.ultima_confianza = confianza_top
             self.btn_feedback.setEnabled(False)
             self.historial.append([ruta, "Ninguna", confianza_top, "", ""])
             self._guardar_historial()
@@ -1245,6 +1267,7 @@ class ClasificadorApp(QWidget):
             )
             self.ultima_imagen_path = ruta
             self.ultima_prediccion = clase_top
+            self.ultima_confianza = confianza_top
             self.btn_feedback.setEnabled(True)
             self.historial.append([ruta, clase_top, confianza_top, "", ""])
             self._guardar_historial()
@@ -1528,6 +1551,29 @@ class ClasificadorApp(QWidget):
                 self.actualizar_metricas()
 
     # --------------------------------------------------------------
+    def limpiar_historial(self):
+        """Borra el historial en memoria y en disco, y resetea la UI."""
+        self.historial = []
+        self._borrar_historial_archivo()
+        self.ultima_prediccion = None
+        self.ultima_imagen_path = None
+        self.ultima_confianza = 0.0
+        self.btn_feedback.setEnabled(False)
+        self.drop_zone.clear_imagen()
+        self.label_resultado.setText("Predicción: —")
+        self.label_resultado.setStyleSheet(
+            "font-size: 13px; font-weight: bold; color: #1a3a6b; "
+            "padding: 12px; background: #eef2f9; border-radius: 7px; "
+            "border: 1px solid #d6deeb;"
+        )
+        self.label_tiempo.setText("Tiempo de inferencia: —")
+        for lbl_nombre, barra, _ in self.top_widgets:
+            lbl_nombre.setText("—")
+            barra.setValue(0)
+        self.actualizar_metricas()
+        self.toast("Historial limpiado")
+
+    # --------------------------------------------------------------
     def actualizar_metricas(self):
         total = len(self.historial)
         aciertos = sum(1 for h in self.historial if h[3] == "Sí")
@@ -1541,14 +1587,14 @@ class ClasificadorApp(QWidget):
         )
         self.progress.setValue(int(porcentaje))
 
-        clases_predichas = []
-        for h in self.historial:
-            if h[4] == "Ninguna":
-                clases_predichas.append("Ninguna")
-            elif h[3] == "Sí" or (h[3] == "No" and h[4]):
-                clases_predichas.append(h[4])
+        # >>> FIX: el gráfico muestra SOLO la predicción actual
+        if self.ultima_prediccion:
+            conteos = Counter([self.ultima_prediccion])
+        elif total > 0 and self.historial[-1][1] == "Ninguna":
+            conteos = Counter(["Ninguna"])
+        else:
+            conteos = Counter()
 
-        conteos = Counter(clases_predichas)
         clases = list(conteos.keys())
         valores = list(conteos.values())
 
@@ -1563,11 +1609,13 @@ class ClasificadorApp(QWidget):
 
         self.ax.clear()
         if clases:
-            self.ax.bar(clases, valores, color=colores, edgecolor=color_ejes, linewidth=0.5)
+            etiquetas_mostrar = [nombre_amigable(c) for c in clases]
+            self.ax.bar(etiquetas_mostrar, valores, color=colores,
+                        edgecolor=color_ejes, linewidth=0.5)
             self.ax.set_ylabel("Cantidad", fontsize=8, color=color_ejes)
-            self.ax.set_title("Predicciones por clase", fontsize=9,
+            self.ax.set_title("Predicción actual", fontsize=9,
                               color=color_titulo, fontweight="bold")
-            self.ax.tick_params(axis='x', rotation=30, labelsize=7, colors=color_ejes)
+            self.ax.tick_params(axis='x', rotation=15, labelsize=8, colors=color_ejes)
             self.ax.tick_params(axis='y', labelsize=7, colors=color_ejes)
             self.ax.spines['top'].set_visible(False)
             self.ax.spines['right'].set_visible(False)
@@ -1766,7 +1814,8 @@ class ClasificadorApp(QWidget):
 
     # --------------------------------------------------------------
     def closeEvent(self, event):
-        self._guardar_historial()
+        # >>> FIX: NO guardar historial, BORRARLO al salir
+        self._borrar_historial_archivo()
         try:
             plt.close(self.fig)
         except Exception:
